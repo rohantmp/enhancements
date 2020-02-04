@@ -9,6 +9,8 @@ reviewers:
   - "@chuffman"
   - "@rojoseph"
   - "@sapillai"
+  - "@leseb"
+  - "@travisn"
 approvers:
   - "@jrivera"
   - "@jsafrane"
@@ -32,17 +34,17 @@ status: implementable
 
 ## Summary
 
-When working with bare-metal OpenShift clusters, due to the absence of storage-provisioners like that in the cloud there needs a lot of manual work to be done for consuming local storage from nodes. The idea is to automate the manual that is required for consuming local-storage from the OpenShift cluster.
+When working with bare-metal OpenShift clusters, due to the absence of storage provisioners like that in the cloud, there is a lot of manual work to be done for consuming local storage from nodes. The idea is to automate the manual steps that are required for consuming local storage in an OpenShift cluster by extending the local storage operator (LSO).
 
 ## Motivation
 
-For consuming local storage from the nodes available in the OpenShift cluster a good amount of manual work has to be done for creating local PVs out of it, making hot-swapping of disks tough.
+To facilitate the consumption of locally-attached storage devices on OpenShift nodes in a cloud-native way.
 
 ### Goals
 
-- Automatically detection of available disks from nodes which can be used as PVs for OpenShift-cluster.
+- Automatic detection of available disks from nodes which can be used as PVs for OpenShift-cluster.
 - Should respond to the attach/detach events of the disks/devices.
-- Should have options for excluding a particular kind of disks.
+- Should have options for filtering particular kind of disks based on properties such as name, size, manufacturer, etc.
 
 ### Non-Goals
 
@@ -104,26 +106,26 @@ type AutoDetectVolumeStatus struct {
 
 type DeviceDiscoveryPolicy struct {
 	// Device type that should be used for auto detection. This would be one of the types supported
-	// by the local-storage operator. Initial possible types can be - crypt,raid1, raid4, raid5,
+	// by the local-storage operator. Initial possible types can be - crypt, raid1, raid4, raid5,
 	// raid10, multipath, disk, tape, printer, processor, worm, rom, scanner, mo-disk, changer,
 	// comm, raid, enclosure, rbc, osd, and no-lun.
 	DeviceType DeviceDiscoveryPolicyType `json:"deviceType"`
 	// A list of regular expressions that will be used to exclude certain devices
 	// For example - ["^rbd[0-9]+p?[0-9]{0,}$"]
 	// +optional
-	DeviceExclusionFilter []string `json:"deviceExclusionFilter"`
+	DeviceInclusionFilter []string `json:"deviceInclusionFilter"`
 	// For excluding rotational devices like mechanical disks
 	// +optional
-	ExcludeRotational bool `json:"excludeRotational"`
+	IncludeRotational bool `json:"includeRotational"`
 	// For excluding non rotational devices like SSDs
 	// +optional
-	ExcludeNonRotational bool `json:"excludeNonRotational"`
+	IncludeNonRotational bool `json:"includeNonRotational"`
 }
 ```
 
 ### Test Plan
 
-- The integration tests for Local-Storage operators already exists. Those tests needs to be upgraded for testing this features.
+- The integration tests for the LSO already exist. These tests will need to be updated to test this feature.
 
 ### Graduation Criteria
 
@@ -155,7 +157,5 @@ N/A
 N/A
 
 ## Alternatives
-- Existing manual creation of LocalVolume CRs. With the node selector on the LocalVolume, a single CR can apply to an entire class of nodes (i.e., a machineset or a physical rack of homogeneous hardware).When a machineset is defined, a corresponding LocalVolume can also be created. Why is this insufficient ?
+- Existing manual creation of LocalVolume CRs. With the node selector on the LocalVolume, a single CR can apply to an entire class of nodes (i.e., a machineset or a physical rack of homogeneous hardware). When a machineset is defined, a corresponding LocalVolume can also be created.
 - Directly enhancing the LocalVolume CR to allow for auto discovery
-
-
