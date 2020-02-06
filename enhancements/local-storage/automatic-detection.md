@@ -2,6 +2,7 @@
 title: automatic-detection-of-disks-in-Local-Storage-Operator
 authors:
   - "@aranjan"
+  - "@rohantmp"
 reviewers:
   - "@jrivera"
   - "@jsafrane"
@@ -17,7 +18,7 @@ approvers:
   - "@hekumar"
   - "@chuffman"
 creation-date: 2020-01-21
-last-updated: 2020-01-21
+last-updated: 2020-02-17
 status: implementable
 ---
 
@@ -51,7 +52,7 @@ To facilitate the consumption of locally-attached storage devices on OpenShift n
 ## Proposal
 
 `local-storage-operator`is already capable of consuming local disks from the nodes and provisioning PVs out of it, but the disk/device paths needs to explicitly specified in the `LocalVolume` CR. The idea is to bring in one more layer of CR above it called `AutoDetectVolumes`.
-The controller for this CR will be responsible for automatically detecting disks/devices from the available nodes and creating/managing the life cycle of `LocalVolumes` which are governed by the `AutoDetectVolumes`.s
+The controller for this CR will be responsible for automatically detecting disks/devices from the available nodes and creating/managing the life cycle of `LocalVolumes` which are governed by the `AutoDetectVolumes`.
 
 ### Risks and Mitigations
 
@@ -66,8 +67,10 @@ API scheme for `AutoDetectVolumes`:
 type DeviceDiscoveryPolicyType string
 
 const (
-	raid DeviceDiscoveryPolicyType = "raid"
+	// The DeviceDiscoveryPolicies that will be supported by the LSO.
+	// These Discovery policies will based on lsblk's type output
 	disk DeviceDiscoveryPolicyType = "disk"
+	part DeviceDiscoveryPolicyType = "part"
 )
 
 type AutoDetectVolumeList struct {
@@ -86,22 +89,20 @@ type AutoDetectVolume struct {
 type AutoDetectVolumeSpec struct {
 	// StorageClass name to use for set of matched devices
 	StorageClassName string `json:"storageClassName"`
-	// Volume mode. Raw or with file system
-	// + optional
-	VolumeMode PersistentVolumeMode `json:"volumeMode,omitempty"`
-	// File system type
-	// +optional
-	FSType string `json:"fsType,omitempty"`
 	// Nodes on which the autoDetection must run
 	// +optional
 	NodeSelector *corev1.NodeSelector `json:"nodeSelector,omitempty"`
 	// DeviceDiscoverPolicies are the list of policies that AutoDetectVolume's controller
 	// will be looking for during detection
-	DeviceDiscoveryPolicies []DeviceDiscoveryPolicy `json:"deviceDiscoveryPolicies,omitempty"`
+	DeviceDiscoveryPolicies DeviceDiscoveryPolicyList `json:"deviceDiscoveryPolicies,omitempty"`
 }
 
 type AutoDetectVolumeStatus struct {
 	Status string `json:"status"`
+}
+
+type DeviceDiscoveryPolicyList struct {
+	Items []DeviceDiscoveryPolicy `json:"items" protobuf:"bytes,2,rep,name=items"`
 }
 
 type DeviceDiscoveryPolicy struct {
@@ -110,22 +111,97 @@ type DeviceDiscoveryPolicy struct {
 	// raid10, multipath, disk, tape, printer, processor, worm, rom, scanner, mo-disk, changer,
 	// comm, raid, enclosure, rbc, osd, and no-lun.
 	DeviceType DeviceDiscoveryPolicyType `json:"deviceType"`
-	// A list of regular expressions that will be used to exclude certain devices
-	// For example - ["^rbd[0-9]+p?[0-9]{0,}$"]
+	// File system type
 	// +optional
-	DeviceInclusionFilter []string `json:"deviceInclusionFilter"`
-	// For excluding rotational devices like mechanical disks
+	FSType string `json:"fsType,omitempty"`
+	// Volume mode. Raw or with file system
+	// + optional
+	VolumeMode PersistentVolumeMode `json:"volumeMode,omitempty"`
+	// DeviceInclusionSpec are the filtration rules for including a device in the device discovery
 	// +optional
-	IncludeRotational bool `json:"includeRotational"`
-	// For excluding non rotational devices like SSDs
+	DeviceInclusionSpec *DeviceInclusionSpec `json:"deviceInclusionSpec"`
+}
+
+// DeviceMechanicalProperty holds the device's mechanical spec. It can be rotational,nonRotational and
+// RotationalAndNonRotational
+type DeviceMechanicalProperty string
+
+const (
+	// The mechanical properties of the devices
+	Rotational                 DeviceMechanicalProperty = "rotational"
+	NonRotational              DeviceMechanicalProperty = "nonRotational"
+	RotationalAndNonRotational DeviceMechanicalProperty = "rotationalAndNonRotational"
+)
+
+type DeviceInclusionSpec struct {
+	// A regular expression that will be used to include certain devices
+	// For example - "^rbd[0-9]+p?[0-9]{0,}$"
 	// +optional
-	IncludeNonRotational bool `json:"includeNonRotational"`
+	DeviceNamePattern string `json:"deviceNameFilter"`
+
+	// The devices of this mechanicalPropery will be included.
+	// By default it is RotationalAndNonRotational(or SSD/HDD both)
+	// +optional
+	DeviceMechanicalProperty DeviceMechanicalProperty `json:"deviceMechanicalProperty"`
+
+	// The minimum size of the device which needs to be included
+	// +optional
+	MinSize *int `json:"minSize"`
+
+	// The maximum size of the device which needs to be included
+	// +optional
+	MaxSize *int `json:"maxSize"`
+
+	// The list of device models which need to be included
+	// +optional
+	Models []string `json:"model"`
+
+	// Devices with below labels will be included
+	// +optional
+	Labels []string `json:"label"`
 }
 ```
+
+An example of autoDetectVolume CR instance:
+```
+apiVersion: local.storage.openshift.io/v1
+kind: AutoDetectVolume
+metadata:
+  name: example-autodetect
+spec: 
+  storageClassName: example-storageclass
+  nodeSelector:
+  deviceDiscoverPolicies:
+    items:
+      - deviceType: part
+        fsType: ext4
+        volumeMode: RWO
+        deviceInclusionSpec:
+            deviceNamePattern: "/dev/sd*"
+            deviceMechanicalProperty: rotationalAndNonRotational
+            minSize: 10G
+            maxSize: 100G
+            labels: 
+                - storage1
+                - storage2
+      - deviceType: disk
+        deviceInclusionSpec:
+            deviceNamePattern: "/dev/sd*"
+            deviceMechanicalProperty: rotational
+            minSize: 10G
+            maxSize: 100G
+            labels: 
+                - storage1
+                - storage2
+```
+
+The autoDetectVolume controller will need to interact with a discovery daemon for discovering devices from nodes. The existing discovery daemon of LSO needs to be modified for serving this purpose. Each daemon can expose all the device metadata information from its node in a configmap, which can be consumed by the local-storage operator and the filtration logic and localVolume CR creation logic can lie in LSO operator in the AutoDetectVolume control loop.  
 
 ### Test Plan
 
 - The integration tests for the LSO already exist. These tests will need to be updated to test this feature.
+- The tests must ensure that detection of devices are working/updating correctly.
+- The tests must ensure that data corruption are not happening during auto detection of devices.
 
 ### Graduation Criteria
 
@@ -142,7 +218,7 @@ These are generalized examples to consider, in addition to the aforementioned
 
 ### Upgrade / Downgrade Strategy
 
-N/A
+Since this requires a new implementation no new upgrade strategy will be required.
 
 ### Version Skew Strategy
 
@@ -159,3 +235,6 @@ N/A
 ## Alternatives
 - Existing manual creation of LocalVolume CRs. With the node selector on the LocalVolume, a single CR can apply to an entire class of nodes (i.e., a machineset or a physical rack of homogeneous hardware). When a machineset is defined, a corresponding LocalVolume can also be created.
 - Directly enhancing the LocalVolume CR to allow for auto discovery
+
+The first approach requires some manual work and knowledge of underlying nodes, this makes it inefficient for large clusters. The second approach can introduce breaking change to the existing GA API.
+Therefore this approach makes sense. 
