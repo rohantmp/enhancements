@@ -18,7 +18,7 @@ approvers:
   - "@hekumar"
   - "@chuffman"
 creation-date: 2020-01-21
-last-updated: 2020-02-17
+last-updated: 2020-02-18
 status: implementable
 ---
 
@@ -87,30 +87,31 @@ type AutoDetectVolume struct {
 }
 
 type AutoDetectVolumeSpec struct {
-	// StorageClass name to use for set of matched devices
-	StorageClassName string `json:"storageClassName"`
 	// Nodes on which the autoDetection must run
 	// +optional
 	NodeSelector *corev1.NodeSelector `json:"nodeSelector,omitempty"`
 	// DeviceDiscoverPolicies are the list of policies that AutoDetectVolume's controller
 	// will be looking for during detection
-	DeviceDiscoveryPolicies DeviceDiscoveryPolicyList `json:"deviceDiscoveryPolicies,omitempty"`
+	DeviceDiscoveryPolicies []DeviceDiscoveryPolicy `json:"deviceDiscoveryPolicies,omitempty"`
 }
 
 type AutoDetectVolumeStatus struct {
 	Status string `json:"status"`
 }
 
-type DeviceDiscoveryPolicyList struct {
-	Items []DeviceDiscoveryPolicy `json:"items" protobuf:"bytes,2,rep,name=items"`
-}
-
 type DeviceDiscoveryPolicy struct {
+	// StorageClass name to use for set of matched devices
+	StorageClassName string `json:"storageClassName"`
 	// Device type that should be used for auto detection. This would be one of the types supported
 	// by the local-storage operator. Initial possible types can be - crypt, raid1, raid4, raid5,
 	// raid10, multipath, disk, tape, printer, processor, worm, rom, scanner, mo-disk, changer,
 	// comm, raid, enclosure, rbc, osd, and no-lun.
-	DeviceType DeviceDiscoveryPolicyType `json:"deviceType"`
+	DeviceType []DeviceDiscoveryPolicyType `json:"deviceType"`
+	// Minimum number of Devices that needs to be detected
+	MinDeviceCount int `json:"minDeviceCount"`
+	// +optional
+	// Maximum number of Devices that needs to be detected
+	MaxDeviceCount int `json:"maxDeviceCount"`
 	// File system type
 	// +optional
 	FSType string `json:"fsType,omitempty"`
@@ -128,17 +129,13 @@ type DeviceMechanicalProperty string
 
 const (
 	// The mechanical properties of the devices
-	Rotational                 DeviceMechanicalProperty = "rotational"
-	NonRotational              DeviceMechanicalProperty = "nonRotational"
-	RotationalAndNonRotational DeviceMechanicalProperty = "rotationalAndNonRotational"
+	// Rotational refers to magnetic disks
+	Rotational    DeviceMechanicalProperty = "rotational"
+	// NonRotational refers to ssds
+	NonRotational DeviceMechanicalProperty = "nonRotational"
 )
 
 type DeviceInclusionSpec struct {
-	// A regular expression that will be used to include certain devices
-	// For example - "^rbd[0-9]+p?[0-9]{0,}$"
-	// +optional
-	DeviceNamePattern string `json:"deviceNameFilter"`
-
 	// The devices of this mechanicalPropery will be included.
 	// By default it is RotationalAndNonRotational(or SSD/HDD both)
 	// +optional
@@ -146,19 +143,11 @@ type DeviceInclusionSpec struct {
 
 	// The minimum size of the device which needs to be included
 	// +optional
-	MinSize *int `json:"minSize"`
+	MinSize resource.Quantity `json:"minSize"`
 
 	// The maximum size of the device which needs to be included
 	// +optional
-	MaxSize *int `json:"maxSize"`
-
-	// The list of device models which need to be included
-	// +optional
-	Models []string `json:"model"`
-
-	// Devices with below labels will be included
-	// +optional
-	Labels []string `json:"label"`
+	MaxSize resource.Quantity `json:"maxSize"`
 }
 ```
 
@@ -168,31 +157,27 @@ apiVersion: local.storage.openshift.io/v1
 kind: AutoDetectVolume
 metadata:
   name: example-autodetect
-spec: 
-  storageClassName: example-storageclass
-  nodeSelector:
+spec:
+  nodeSelector: null
   deviceDiscoverPolicies:
-    items:
-      - deviceType: part
-        fsType: ext4
-        volumeMode: RWO
-        deviceInclusionSpec:
-            deviceNamePattern: "/dev/sd*"
-            deviceMechanicalProperty: rotationalAndNonRotational
-            minSize: 10G
-            maxSize: 100G
-            labels: 
-                - storage1
-                - storage2
-      - deviceType: disk
-        deviceInclusionSpec:
-            deviceNamePattern: "/dev/sd*"
-            deviceMechanicalProperty: rotational
-            minSize: 10G
-            maxSize: 100G
-            labels: 
-                - storage1
-                - storage2
+    - deviceType: part
+      fsType: ext4
+      storageClassName: example-storageclass1
+      volumeMode: filesystem
+      minDeviceCount: 5
+      deviceInclusionSpec:
+        deviceMechanicalProperty: nonRotational
+        minSize: 10G
+        maxSize: 100G
+    - deviceType: disk
+      storageClassName: example-storageclass2
+      volumeMode: Block
+      minDeviceCount: 5
+      maxDeviceCount: 10
+      deviceInclusionSpec:
+        deviceMechanicalProperty: rotational
+        minSize: 10G
+        maxSize: 100G
 ```
 
 The autoDetectVolume controller will need to interact with a discovery daemon for discovering devices from nodes. The existing discovery daemon of LSO needs to be modified for serving this purpose. Each daemon can expose all the device metadata information from its node in a configmap, which can be consumed by the local-storage operator and the filtration logic and localVolume CR creation logic can lie in LSO operator in the AutoDetectVolume control loop.  
