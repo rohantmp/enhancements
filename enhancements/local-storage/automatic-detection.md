@@ -32,7 +32,6 @@ status: implementable
 - [ ] Graduation criteria for dev preview, tech preview, GA
 - [ ] User-facing documentation is created in [openshift-docs](https://github.com/openshift/openshift-docs/)
 
-
 ## Summary
 
 When working with bare-metal OpenShift clusters, due to the absence of storage provisioners like that in the cloud, there is a lot of manual work to be done for consuming local storage from nodes. The idea is to automate the manual steps that are required for consuming local storage in an OpenShift cluster by extending the local storage operator (LSO).
@@ -56,7 +55,12 @@ The controller for this CR will be responsible for automatically detecting disks
 
 ### Risks and Mitigations
 
-- Detecting disks that contain data and/or are in-use.
+- LSO will detect disks that contain data and/or are in-use via the following checks:
+  - We can open the device exclusively.
+  - The device is not read-only.
+  - The device is not removable.
+  - The device has no child partitions.
+  - The device has no FS signature.
 - Ensuring disks aren't re-detected as new or otherwise destroyed if their device path changes.
 
 ## Design Details
